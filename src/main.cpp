@@ -8,14 +8,25 @@
 
 #include <SinricPro.h>
 #include <SinricProThermostat.h>
+#include <DHT.h>
 
 #include "credentials.h"
 
 
 const int BAUD_RATE = 9600;
+const int EVENT_WAIT_TIME = 60000;
+const int DHT_PIN = D5;
+const int DHT_TYPE = DHT11;
+
+DHT dht(DHT_PIN, DHT_TYPE);
 
 bool powerState;
 float setTemperature;
+float actualTemperature;
+float actualHumidity;
+float lastTemperature;
+float lastHumidity;
+unsigned long lastEvent = (-EVENT_WAIT_TIME);
 
 
 bool onPowerState(const String &deviceId, bool &state) {
@@ -40,6 +51,37 @@ bool onAdjustTargetTemperature(const String & deviceId, float &temperatureDelta)
 bool onThermostatMode(const String &deviceId, String &mode) {
   Serial.printf("Thermostat %s set to mode %s\r\n", deviceId.c_str(), mode.c_str());
   return true;
+}
+
+void handleTemperatureSensor() {
+  unsigned long actualMillis = millis();
+  if (actualMillis - lastEvent < EVENT_WAIT_TIME) {
+    return;
+  }
+
+  actualTemperature = dht.readTemperature();
+  actualHumidity = dht.readHumidity();
+
+  if (isnan(actualTemperature) || isnan(actualHumidity)) {
+    Serial.printf("DHT reading failed!\r\n");
+    return;
+  } 
+
+  if (actualTemperature == lastTemperature || actualHumidity == lastHumidity) {
+    return;
+  }
+
+  SinricProThermostat &myThermostat = SinricPro[THERMOSTAT_ID];
+  bool success = myThermostat.sendTemperatureEvent(actualTemperature, actualHumidity);
+  if (success) {
+    Serial.printf("Temperature: %2.1f Celsius\tHumidity: %2.1f%%\r\n", actualTemperature, actualHumidity);
+  } else {
+    Serial.printf("Something went wrong...could not send Event to server!\r\n");
+  }
+
+  lastTemperature = actualTemperature;
+  lastHumidity = actualHumidity;
+  lastEvent = actualMillis;
 }
 
 
@@ -71,10 +113,12 @@ void setupSinricPro() {
 
 void setup() {
   Serial.begin(BAUD_RATE); Serial.printf("\r\n\r\n");
+  dht.begin();
   setupWiFi();
   setupSinricPro();
 }
 
 void loop() {
   SinricPro.handle();
+  handleTemperatureSensor();
 }
